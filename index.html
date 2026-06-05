@@ -728,7 +728,8 @@
           <div class="loading-state">
             <div class="loading-spinner">❖</div>
             <p style="font-family:'Cormorant Garamond',serif;font-size:26px;color:var(--dark);margin-bottom:10px">Crafting Your Concepts…</p>
-            <p style="font-size:15px;color:var(--muted);margin-bottom:24px;max-width:400px;margin-left:auto;margin-right:auto;line-height:1.7">Our AI is reading your home's architecture and generating 4 personalized design concepts.</p>
+            <p id="loading-msg" style="font-size:15px;color:var(--rust);font-weight:500;margin-bottom:8px">Starting design generation…</p>
+            <p style="font-size:14px;color:var(--muted);margin-bottom:24px;max-width:400px;margin-left:auto;margin-right:auto;line-height:1.7">Our AI is analyzing your home and crafting each concept individually.</p>
             <div class="loading-dots"><span>●</span><span>●</span><span>●</span></div>
           </div>
         </div>
@@ -1054,36 +1055,88 @@ document.getElementById('upload-zone').addEventListener('drop', e => {
 });
 
 // ── GENERATE ──
+const SINGLE_CONCEPT_PROMPT = `You are Desert Lisbon, an expert Arizona exterior home design AI. Analyze the home photo and generate ONE vivid redesign concept for the style provided.
+
+Return ONLY a JSON object (no markdown, no backticks) with this exact structure:
+{
+  "homeAnalysis": "2-sentence description of the current home's architecture and key transformation opportunities",
+  "styleId": "style_id_here",
+  "styleName": "Style Name",
+  "tagline": "One punchy sentence capturing the transformation",
+  "colorPalette": [
+    {"name": "Color Name", "hex": "#XXXXXX", "use": "specific application"},
+    {"name": "Color Name", "hex": "#XXXXXX", "use": "specific application"},
+    {"name": "Color Name", "hex": "#XXXXXX", "use": "specific application"},
+    {"name": "Color Name", "hex": "#XXXXXX", "use": "specific application"}
+  ],
+  "tileRecommendations": [
+    {"name": "Tile style", "pattern": "pattern description", "placement": "exact location on home"},
+    {"name": "Tile style", "pattern": "pattern description", "placement": "exact location on home"},
+    {"name": "Tile style", "pattern": "pattern description", "placement": "exact location on home"}
+  ],
+  "plants": [
+    {"name": "Plant name", "why": "why it fits style + AZ climate"},
+    {"name": "Plant name", "why": "why it fits style + AZ climate"},
+    {"name": "Plant name", "why": "why it fits style + AZ climate"},
+    {"name": "Plant name", "why": "why it fits style + AZ climate"}
+  ],
+  "keyTransformations": ["change 1", "change 2", "change 3", "change 4"],
+  "moodDescription": "3-sentence atmospheric description of approaching this home at golden hour"
+}
+
+Reference specific visible features in the photo. All plants must be Arizona climate-appropriate. Be vivid and inspiring.`;
+
+async function generateSingleConcept(style, isFirst) {
+  const res = await fetch('/.netlify/functions/claude', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-5',
+      max_tokens: 1200,
+      system: SINGLE_CONCEPT_PROMPT,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: imageMimeType, data: imageBase64 } },
+          { type: 'text', text: `Generate a redesign concept for this Arizona home in the style of: ${style.name} — ${style.desc}\n\nStyle ID: ${style.id}\n\nReturn only the JSON object.` }
+        ]
+      }]
+    })
+  });
+  const data = await res.json();
+  const text = data.content.map(b => b.text || '').join('');
+  const clean = text.replace(/```json|```/g, '').trim();
+  return JSON.parse(clean);
+}
+
 document.getElementById('generate-btn').addEventListener('click', async () => {
   const err = document.getElementById('tool-error');
   err.style.display = 'none';
   showStep('loading');
 
-  const styleList = STYLES.filter(s => selectedStyles.includes(s.id))
-    .map(s => `${s.name}: ${s.desc}`).join('\n');
+  const chosenStyles = STYLES.filter(s => selectedStyles.includes(s.id));
+  const concepts = [];
+  let homeAnalysis = '';
 
   try {
-    const res = await fetch('/.netlify/functions/claude', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-5',
-        max_tokens: 4000,
-        system: SYSTEM_PROMPT,
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'image', source: { type: 'base64', media_type: imageMimeType, data: imageBase64 } },
-            { type: 'text', text: `Analyze this Arizona home and generate redesign concepts for:\n\n${styleList}\n\nReturn only the JSON object.` }
-          ]
-        }]
-      })
-    });
+    for (let i = 0; i < chosenStyles.length; i++) {
+      const style = chosenStyles[i];
+      updateLoadingMessage(`Designing ${style.emoji} ${style.name}… (${i + 1} of 4)`);
+      const concept = await generateSingleConcept(style, i === 0);
+      if (i === 0) homeAnalysis = concept.homeAnalysis || '';
+      concepts.push({
+        styleId: concept.styleId,
+        styleName: concept.styleName,
+        tagline: concept.tagline,
+        colorPalette: concept.colorPalette,
+        tileRecommendations: concept.tileRecommendations,
+        plants: concept.plants,
+        keyTransformations: concept.keyTransformations,
+        moodDescription: concept.moodDescription,
+      });
+    }
 
-    const data = await res.json();
-    const text = data.content.map(b => b.text || '').join('');
-    const clean = text.replace(/```json|```/g, '').trim();
-    results = JSON.parse(clean);
+    results = { homeAnalysis, concepts };
     activeTab = 0;
     renderResults();
     showStep('results');
@@ -1095,6 +1148,11 @@ document.getElementById('generate-btn').addEventListener('click', async () => {
     err.textContent = 'Something went wrong generating concepts. Please try again.';
   }
 });
+
+function updateLoadingMessage(msg) {
+  const el = document.getElementById('loading-msg');
+  if (el) el.textContent = msg;
+}
 
 function renderResults() {
   document.getElementById('results-analysis').textContent = results.homeAnalysis;
